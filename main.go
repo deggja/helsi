@@ -61,7 +61,7 @@ func loadWorkouts(filepath string) ([]WorkoutSession, error) {
     return loadedWorkouts, nil
 }
 
-func inputExerciseDetails(exercise *Exercise, completedExercises map[string]bool) error {
+func inputExerciseDetails(exercise *Exercise, completedExercises map[string]bool, allExercises []Exercise) error {
 	if _, done := completedExercises[exercise.Name]; done {
 		return nil
 	}
@@ -119,26 +119,27 @@ func inputExerciseDetails(exercise *Exercise, completedExercises map[string]bool
 	return nil
 }
 
-func logWorkout(workouts []WorkoutSession) {
+func logWorkout(workouts, loggedWorkouts []WorkoutSession) {
     fmt.Print("\033[H\033[2J")
-    workoutOptions := make([]huh.Option[string], len(workouts))
+    workoutOptions := make([]huh.Option[string], len(workouts)+1)  // Include space for 'Back to Main Menu'
     for i, workout := range workouts {
         workoutOptions[i] = huh.NewOption(workout.Name, workout.Name)
     }
+    // Add 'Back to Main Menu' option at the end
+    workoutOptions[len(workouts)] = huh.NewOption("Return to main menu", "Return to main menu")
 
     var selectedWorkoutName string
-    err := huh.NewSelect[string]().
-        Title("Choose your workout:").
-        Options(workoutOptions...).
-        Value(&selectedWorkoutName).
-        Run()
-
+    err := huh.NewSelect[string]().Title("Choose your workout or go back:").Options(workoutOptions...).Value(&selectedWorkoutName).Run()
     if err != nil {
         fmt.Println("Error selecting workout:", err)
         return
     }
 
-    // Find the selected workout
+    if selectedWorkoutName == "Return to main menu" {
+        mainMenu(workouts, loggedWorkouts) // Return to main menu if selected
+        return
+    }
+
     var selectedWorkout *WorkoutSession
     for _, workout := range workouts {
         if workout.Name == selectedWorkoutName {
@@ -155,9 +156,39 @@ func logWorkout(workouts []WorkoutSession) {
     selectedWorkout.Date = time.Now()
     completedExercises := make(map[string]bool)
 
-    for i := range selectedWorkout.Exercises {
-        if !completedExercises[selectedWorkout.Exercises[i].Name] {
-            err := inputExerciseDetails(&selectedWorkout.Exercises[i], completedExercises)
+    // Pre-determine if both exercises are in the workout
+    hasStong, hasManuala := false, false
+    for _, ex := range selectedWorkout.Exercises {
+        if ex.Name == "Benkpress med stong" {
+            hasStong = true
+        } else if ex.Name == "Benkpress med manuala" {
+            hasManuala = true
+        }
+    }
+
+    // Prompt the user to choose one if both are present
+    if hasStong && hasManuala {
+        var choice string
+        options := []huh.Option[string]{
+            huh.NewOption("Benkpress med stong", "Benkpress med stong"),
+            huh.NewOption("Benkpress med manuala", "Benkpress med manuala"),
+        }
+        err = huh.NewSelect[string]().Title("Choose type of Benkpress:").Options(options...).Value(&choice).Run()
+        if err != nil {
+            fmt.Println("Error choosing between exercises:", err)
+            return
+        }
+        if choice == "Benkpress med stong" {
+            completedExercises["Benkpress med manuala"] = true
+        } else {
+            completedExercises["Benkpress med stong"] = true
+        }
+    }
+
+    // Proceed with workout logging
+    for _, ex := range selectedWorkout.Exercises {
+        if !completedExercises[ex.Name] {
+            err := inputExerciseDetails(&ex, completedExercises, selectedWorkout.Exercises)
             if err != nil {
                 fmt.Println("Error inputting exercise details:", err)
                 return
@@ -165,31 +196,16 @@ func logWorkout(workouts []WorkoutSession) {
         }
     }
 
-    filename := "log.json"
-    savedWorkouts, err := loadWorkouts(filename)
-    if err != nil {
-        fmt.Println("Error loading workouts:", err)
-        savedWorkouts = []WorkoutSession{*selectedWorkout}
-    } else {
-        savedWorkouts = append(savedWorkouts, *selectedWorkout)
-    }
-
-    err = saveWorkouts(savedWorkouts, filename)
+    // Save the workout data
+    err = saveWorkouts(loggedWorkouts, "log.json")
     if err != nil {
         fmt.Println("Failed to save workouts:", err)
-        return
     }
 
-    mainMenu(workouts) // Make sure to call it correctly here
+    mainMenu(workouts, loggedWorkouts)
 }
 
-func showProgressionInteractive(workouts []WorkoutSession) {
-    workouts, err := loadWorkouts("log.json")
-    if err != nil {
-        fmt.Println("Error loading workouts:", err)
-        return
-    }
-
+func showProgressionInteractive(workouts, loggedWorkouts []WorkoutSession) {
     now := time.Now()
     oneMonthAgo := now.AddDate(0, -1, 0)
     oneWeekAgo := now.AddDate(0, 0, -7)
@@ -197,7 +213,7 @@ func showProgressionInteractive(workouts []WorkoutSession) {
     totalWorkouts, workoutsLastMonth, workoutsLastWeek := 0, 0, 0
     improvements := []Improvement{}
 
-    for _, workout := range workouts {
+    for _, workout := range loggedWorkouts {
         if workout.Date.After(oneMonthAgo) {
             workoutsLastMonth++
         }
@@ -206,7 +222,7 @@ func showProgressionInteractive(workouts []WorkoutSession) {
         }
 
         totalWorkouts++
-        imp := calculateImprovements(workout, workouts)
+        imp := calculateImprovements(workout, loggedWorkouts)
         improvements = append(improvements, imp...)
     }
 
@@ -227,7 +243,7 @@ func showProgressionInteractive(workouts []WorkoutSession) {
 
     // Post-view action selection
     var action string
-    err = huh.NewSelect[string]().
+    err := huh.NewSelect[string]().
         Title("What would you like to do next?").
         Options(
             huh.NewOption("Return to main menu", "menu"),
@@ -242,13 +258,11 @@ func showProgressionInteractive(workouts []WorkoutSession) {
     }
 
     if action == "menu" {
-        mainMenu(workouts)
+        mainMenu(workouts, loggedWorkouts)
     } else if action == "quit" {
         fmt.Println("Exiting program.")
         os.Exit(0)
     }
-
-	mainMenu(workouts)
 }
 
 func generateImprovementFields(improvements []Improvement) []huh.Field {
@@ -314,7 +328,7 @@ func findFirstInstance(name string, workouts []WorkoutSession, since time.Time) 
     return earliestExercise
 }
 
-func mainMenu(workouts []WorkoutSession) {
+func mainMenu(workouts, loggedWorkouts []WorkoutSession) {
     fmt.Print("\033[H\033[2J")
 
     var choice string
@@ -323,7 +337,7 @@ func mainMenu(workouts []WorkoutSession) {
         Options(
             huh.NewOption("Log new workout", "Log new workout"),
             huh.NewOption("Show progression", "Show progression"),
-			huh.NewOption("Quit", "Quit"),
+            huh.NewOption("Quit", "Quit"),
         ).
         Value(&choice).
         Run()
@@ -336,10 +350,10 @@ func mainMenu(workouts []WorkoutSession) {
     // Execute the chosen option
     switch choice {
     case "Log new workout":
-        logWorkout(workouts) // pass workouts here
+        logWorkout(workouts, loggedWorkouts) // Pass both slices
     case "Show progression":
-        showProgressionInteractive(workouts) // pass workouts here
-	case "Quit":  // Handling the Quit option
+        showProgressionInteractive(workouts, loggedWorkouts) // Use only logged workouts
+    case "Quit":  // Handling the Quit option
         fmt.Println("Exiting program.")
         os.Exit(0)
     }
@@ -348,13 +362,17 @@ func mainMenu(workouts []WorkoutSession) {
 func main() {
     fmt.Print("\033[H\033[2J")
 
-	configPath := flag.String("config", "workouts.json", "path to the configuration file containing workouts")
-	flag.Parse()
+    configPath := flag.String("config", "workouts.json", "path to the configuration file containing workouts")
+    flag.Parse()
 
-	workouts, err := loadWorkouts(*configPath)
-	if err != nil {
-		fmt.Printf("Failed to load workouts from file: %v\n", err)
-		os.Exit(1)
-	}
-    mainMenu(workouts)
+    workouts, err := loadWorkouts(*configPath)
+    if err != nil {
+        fmt.Printf("Failed to load workouts from file: %v\n", err)
+        os.Exit(1)
+    }
+    loggedWorkouts, err := loadWorkouts("log.json") // Load logged workouts separately
+    if err != nil {
+        loggedWorkouts = []WorkoutSession{} // Initialize if not available
+    }
+    mainMenu(workouts, loggedWorkouts)
 }
