@@ -121,11 +121,11 @@ func inputExerciseDetails(exercise *Exercise, completedExercises map[string]bool
 
 func logWorkout(workouts, loggedWorkouts []WorkoutSession) {
     fmt.Print("\033[H\033[2J")
-    workoutOptions := make([]huh.Option[string], len(workouts)+1)  // Include space for 'Back to Main Menu'
+    workoutOptions := make([]huh.Option[string], len(workouts)+1)
     for i, workout := range workouts {
         workoutOptions[i] = huh.NewOption(workout.Name, workout.Name)
     }
-    // Add 'Back to Main Menu' option at the end
+    // Add 'Return to main menu' option at the end
     workoutOptions[len(workouts)] = huh.NewOption("Return to main menu", "Return to main menu")
 
     var selectedWorkoutName string
@@ -203,6 +203,47 @@ func logWorkout(workouts, loggedWorkouts []WorkoutSession) {
     }
 
     mainMenu(workouts, loggedWorkouts)
+}
+
+func viewLoggedWorkouts() {
+    loggedWorkouts, err := loadWorkouts("log.json")
+    if err != nil {
+        fmt.Println("Error loading logged workouts:", err)
+        return
+    }
+
+    if len(loggedWorkouts) == 0 {
+        fmt.Println("No workouts have been logged yet.")
+        return
+    }
+
+    // Display options to user
+    workoutOptions := make([]huh.Option[string], len(loggedWorkouts))
+    for i, workout := range loggedWorkouts {
+        workoutOptions[i] = huh.NewOption(fmt.Sprintf("%s on %s", workout.Name, workout.Date.Format("2006-01-02")), workout.Name)
+    }
+
+    var selectedWorkoutName string
+    err = huh.NewSelect[string]().Title("Select a workout to view details:").Options(workoutOptions...).Value(&selectedWorkoutName).Run()
+    if err != nil {
+        fmt.Println("Error selecting workout:", err)
+        return
+    }
+
+    // Display selected workout details
+    for _, workout := range loggedWorkouts {
+        if workout.Name == selectedWorkoutName {
+            fmt.Printf("\nWorkout: %s\nDate: %s\n", workout.Name, workout.Date.Format("2006-01-02"))
+            for _, exercise := range workout.Exercises {
+                fmt.Printf("\nExercise: %s\nSets: %d\n", exercise.Name, exercise.Sets)
+                for i := range exercise.Reps {
+                    fmt.Printf("Set %d: %d reps, %.2f kg\n", i+1, exercise.Reps[i], exercise.Weights[i])
+                }
+                fmt.Println("Rest: ", exercise.Rest)
+            }
+            break
+        }
+    }
 }
 
 func showProgressionInteractive(workouts, loggedWorkouts []WorkoutSession) {
@@ -337,6 +378,7 @@ func mainMenu(workouts, loggedWorkouts []WorkoutSession) {
         Options(
             huh.NewOption("Log new workout", "Log new workout"),
             huh.NewOption("Show progression", "Show progression"),
+            huh.NewOption("View logged workouts", "View logged workouts"),
             huh.NewOption("Quit", "Quit"),
         ).
         Value(&choice).
@@ -350,10 +392,12 @@ func mainMenu(workouts, loggedWorkouts []WorkoutSession) {
     // Execute the chosen option
     switch choice {
     case "Log new workout":
-        logWorkout(workouts, loggedWorkouts) // Pass both slices
+        logWorkout(workouts, loggedWorkouts)
     case "Show progression":
-        showProgressionInteractive(workouts, loggedWorkouts) // Use only logged workouts
-    case "Quit":  // Handling the Quit option
+        showProgressionInteractive(workouts, loggedWorkouts)
+    case "View logged workouts":
+        viewLoggedWorkouts()
+    case "Quit":
         fmt.Println("Exiting program.")
         os.Exit(0)
     }
