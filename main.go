@@ -1,16 +1,23 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
 	"time"
 
 	"github.com/charmbracelet/huh"
+	"github.com/gin-gonic/gin"
+	"golang.ngrok.com/ngrok"
+	"golang.ngrok.com/ngrok/config"
 )
 
 type Exercise struct {
@@ -235,11 +242,24 @@ func viewLoggedWorkouts() {
         if workout.Name == selectedWorkoutName {
             fmt.Printf("\nWorkout: %s\nDate: %s\n", workout.Name, workout.Date.Format("2006-01-02"))
             for _, exercise := range workout.Exercises {
-                fmt.Printf("\nExercise: %s\nSets: %d\n", exercise.Name, exercise.Sets)
-                for i := range exercise.Reps {
-                    fmt.Printf("Set %d: %d reps, %.2f kg\n", i+1, exercise.Reps[i], exercise.Weights[i])
+                // Check if there are any weight entries, even zeros
+                displayExercise := len(exercise.Weights) > 0 // only display if there are weight entries
+
+                if displayExercise {
+                    fmt.Printf("\nExercise: %s\nSets: %d\n", exercise.Name, exercise.Sets)
+                    for i := 0; i < exercise.Sets; i++ {
+                        reps := "n/a"
+                        weight := "n/a"
+                        if i < len(exercise.Reps) {
+                            reps = fmt.Sprintf("%d", exercise.Reps[i])
+                        }
+                        if i < len(exercise.Weights) {
+                            weight = fmt.Sprintf("%.2f kg", exercise.Weights[i])
+                        }
+                        fmt.Printf("Set %d: %s reps, %s\n", i+1, reps, weight)
+                    }
+                    fmt.Println("Rest: ", exercise.Rest)
                 }
-                fmt.Println("Rest: ", exercise.Rest)
             }
             break
         }
@@ -403,20 +423,145 @@ func mainMenu(workouts, loggedWorkouts []WorkoutSession) {
     }
 }
 
+// Frontend logic
+
+func CORSMiddleware() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+        c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+        c.Writer.Header().Set("Access-Control-Allow-Headers", "Origin, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+        c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT")
+
+        if c.Request.Method == "OPTIONS" {
+            c.AbortWithStatus(204)
+            return
+        }
+
+        c.Next()
+    }
+}
+
+type WorkoutLog struct {
+    Date      string     `json:"Date"`
+    Name      string     `json:"Name"`
+    Exercises []Exercise `json:"Exercises"`
+}
+
+func setupRouter() *gin.Engine {
+    router := gin.Default()
+    router.Use(CORSMiddleware())
+
+    // Serve static files from the dist directory
+    router.Static("/static", "./frontend/dist")
+
+    router.StaticFile("/", "./frontend/dist/index.html")
+    
+    router.GET("/api/workouts", func(c *gin.Context) {
+        workouts, err := loadWorkouts("workouts.json")
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load workouts"})
+            return
+        }
+        c.JSON(http.StatusOK, workouts)
+    })
+
+    router.POST("/api/log", func(c *gin.Context) {
+        var workout WorkoutLog
+    
+        if err := c.BindJSON(&workout); err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+            return
+        }
+    
+        // Parse the date string
+        parsedDate, err := time.Parse("2006-01-02", workout.Date)
+        if err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to parse date: %v", err)})
+            return
+        }
+    
+        // Load existing workouts
+        existingWorkouts, err := loadWorkouts("log.json")
+        if err != nil {
+            existingWorkouts = []WorkoutSession{} // Initialize if file not found
+        }
+    
+        // Convert WorkoutLog to WorkoutSession
+        newWorkoutSession := WorkoutSession{
+            Date:      parsedDate,
+            Name:      workout.Name,
+            Exercises: workout.Exercises,
+        }
+    
+        // Append the new workout session
+        existingWorkouts = append(existingWorkouts, newWorkoutSession)
+    
+        // Save the updated list
+        if err := saveWorkouts(existingWorkouts, "log.json"); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save workouts"})
+            return
+        }
+    
+        c.JSON(http.StatusOK, gin.H{"status": "Workout logged!"})
+    })
+    
+    return router
+}
+
+func ngrokForwarder(ctx context.Context) (ngrok.Forwarder, error) {
+    backendUrl, err := url.Parse("http://localhost:8080")
+    if err != nil {
+        return nil, err
+    }
+
+    fmt.Println("Setting up ngrok tunnel...")
+
+    tunnel, err := ngrok.ListenAndForward(ctx,
+        backendUrl,
+        config.HTTPEndpoint(
+            config.WithDomain("welcomed-usefully-porpoise.ngrok-free.app"), // Custom domain
+        ),
+        ngrok.WithAuthtoken(os.Getenv("NGROK_AUTHTOKEN")),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("ngrok.ListenAndForward error: %v", err)
+    }
+
+    fmt.Println("ngrok tunnel established")
+    return tunnel, nil
+}
+
 func main() {
-    fmt.Print("\033[H\033[2J")
+	fmt.Print("\033[H\033[2J")
 
-    configPath := flag.String("config", "workouts.json", "path to the configuration file containing workouts")
-    flag.Parse()
+	// CLI flags
+	configPath := flag.String("config", "workouts.json", "path to the configuration file containing workouts")
+	serveFlag := flag.Bool("serve", false, "Start web server")
+	flag.Parse()
 
-    workouts, err := loadWorkouts(*configPath)
-    if err != nil {
-        fmt.Printf("Failed to load workouts from file: %v\n", err)
-        os.Exit(1)
-    }
-    loggedWorkouts, err := loadWorkouts("log.json") // Load logged workouts separately
-    if err != nil {
-        loggedWorkouts = []WorkoutSession{} // Initialize if not available
-    }
-    mainMenu(workouts, loggedWorkouts)
+	if *serveFlag {
+		router := setupRouter()
+
+		ctx := context.Background()
+		tunnel, err := ngrokForwarder(ctx)
+		if err != nil {
+			log.Fatalf("Failed to start ngrok tunnel: %v", err)
+		}
+		fmt.Println("ngrok URL: ", tunnel.URL())
+		fmt.Println("Starting web server on http://localhost:8080")
+		router.Run(":8080")
+		return
+	}
+
+	// Continue with CLI logic
+	workouts, err := loadWorkouts(*configPath)
+	if err != nil {
+		fmt.Printf("Failed to load workouts from file: %v\n", err)
+		os.Exit(1)
+	}
+	loggedWorkouts, err := loadWorkouts("log.json")
+	if err != nil {
+		loggedWorkouts = []WorkoutSession{} // Initialize if not available
+	}
+	mainMenu(workouts, loggedWorkouts)
 }
