@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/huh"
@@ -220,24 +221,33 @@ func viewLoggedWorkouts() {
     // Display options to user
     workoutOptions := make([]huh.Option[string], len(loggedWorkouts))
     for i, workout := range loggedWorkouts {
-        workoutOptions[i] = huh.NewOption(fmt.Sprintf("%s on %s", workout.Name, workout.Date.Format("2006-01-02")), workout.Name)
+        workoutID := fmt.Sprintf("%s on %s", workout.Name, workout.Date.Format("2006-01-02"))
+        workoutOptions[i] = huh.NewOption(workoutID, workoutID) // Use both name and date as unique identifier
     }
 
-    var selectedWorkoutName string
-    err = huh.NewSelect[string]().Title("Select a workout to view details:").Options(workoutOptions...).Value(&selectedWorkoutName).Run()
+    var selectedWorkoutID string
+    err = huh.NewSelect[string]().Title("Select a workout to view details:").Options(workoutOptions...).Value(&selectedWorkoutID).Run()
     if err != nil {
         fmt.Println("Error selecting workout:", err)
         return
     }
 
+    // Extract the selected workout's name and date
+    parts := strings.Split(selectedWorkoutID, " on ")
+    selectedName := parts[0]
+    selectedDate, _ := time.Parse("2006-01-02", parts[1])
+
     // Display selected workout details
     for _, workout := range loggedWorkouts {
-        if workout.Name == selectedWorkoutName {
+        if workout.Name == selectedName && workout.Date.Format("2006-01-02") == selectedDate.Format("2006-01-02") {
             fmt.Printf("\nWorkout: %s\nDate: %s\n", workout.Name, workout.Date.Format("2006-01-02"))
             for _, exercise := range workout.Exercises {
                 fmt.Printf("\nExercise: %s\nSets: %d\n", exercise.Name, exercise.Sets)
                 for i := range exercise.Reps {
-                    fmt.Printf("Set %d: %d reps, %.2f kg\n", i+1, exercise.Reps[i], exercise.Weights[i])
+                    // Check if there are enough entries in the Reps and Weights slices before accessing
+                    if i < len(exercise.Reps) && i < len(exercise.Weights) {
+                        fmt.Printf("Set %d: %d reps, %.2f kg\n", i+1, exercise.Reps[i], exercise.Weights[i])
+                    }
                 }
                 fmt.Println("Rest: ", exercise.Rest)
             }
