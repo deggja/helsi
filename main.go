@@ -462,6 +462,9 @@ func setupRouter() *gin.Engine {
         c.JSON(http.StatusOK, workouts)
     })
 
+    // Add route for fetching last session details
+    router.GET("/api/last-session/:name", getLastSessionDetails)
+
     router.POST("/api/log", func(c *gin.Context) {
         var workout WorkoutLog
     
@@ -500,8 +503,7 @@ func setupRouter() *gin.Engine {
         }
     
         c.JSON(http.StatusOK, gin.H{"status": "Workout logged!"})
-    })
-    
+    })    
     return router
 }
 
@@ -526,6 +528,34 @@ func ngrokForwarder(ctx context.Context) (ngrok.Forwarder, error) {
 
     fmt.Println("ngrok tunnel established")
     return tunnel, nil
+}
+
+func getLastSessionDetails(c *gin.Context) {
+    exerciseName := c.Param("name")
+    workouts, err := loadWorkouts("log.json")
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load workouts"})
+        return
+    }
+    
+    var lastSession *Exercise
+    for i := len(workouts) - 1; i >= 0; i-- { // Iterate in reverse to find the last occurrence quickly
+        for _, ex := range workouts[i].Exercises {
+            if ex.Name == exerciseName {
+                lastSession = &ex
+                break
+            }
+        }
+        if lastSession != nil {
+            break
+        }
+    }
+
+    if lastSession == nil {
+        c.JSON(http.StatusOK, gin.H{"message": "No previous session found"})
+    } else {
+        c.JSON(http.StatusOK, lastSession)
+    }
 }
 
 func main() {

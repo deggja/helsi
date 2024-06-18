@@ -11,10 +11,15 @@
 
     <div class="exercises" v-for="exercise in filteredExercises" :key="exercise.Name">
       <h2>{{ exercise.Name }}</h2>
+      <ul v-if="exercise.lastSession">
+        <li v-for="(rep, index) in exercise.lastSession.Reps" :key="index">
+          Set {{ index + 1 }}: {{ rep }} reps, {{ exercise.lastSession.Weights[index] }} kg
+        </li>
+      </ul>
       <div class="set-details" v-for="setIndex in exercise.Sets" :key="setIndex">
         Set {{ setIndex }}:
-        <input type="number" v-model="exercise.Reps[setIndex-1]" @change="handleInput(exercise.Name)" placeholder="Reps"/>
-        <input type="number" v-model="exercise.Weights[setIndex-1]" @change="handleInput(exercise.Name)" placeholder="Weight (kg)"/>
+        <input type="number" v-model="exercise.Reps[setIndex-1]" placeholder="Reps"/>
+        <input type="number" v-model="exercise.Weights[setIndex-1]" placeholder="Weight (kg)"/>
       </div>
     </div>
 
@@ -55,7 +60,9 @@ export default {
   fetchExercises() {
     const workout = this.workouts.find(w => w.Name === this.selectedWorkout);
     this.exercises = workout ? workout.Exercises : [];
-    this.disabledExercises = {};
+    this.exercises.forEach(exercise => {
+        this.fetchLastSession(exercise.Name);
+    });
   },
   handleInput(exerciseName) {
     const currentExercise = this.exercises.find(ex => ex.Name === exerciseName);
@@ -95,6 +102,19 @@ export default {
             console.error("Error saving workout:", error);
             console.error("Error details:", error.response.data);
         });
+    },
+    fetchLastSession(exerciseName) {
+      const encodedName = encodeURIComponent(exerciseName);
+      const url = `/last-session/${encodedName}`;
+      console.log("Fetching URL:", url);
+      axios.get(`/last-session/${encodedName}`).then(response => {
+          const lastSession = response.data;
+          const exerciseIndex = this.exercises.findIndex(ex => ex.Name === exerciseName);
+          if (exerciseIndex !== -1) {
+            this.exercises[exerciseIndex].lastSession = lastSession;
+            this.exercises = [...this.exercises];
+          }
+      }).catch(error => console.error(`Failed to fetch last session details for ${exerciseName}:`, error));
     }
 }
 
